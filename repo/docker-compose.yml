@@ -1,0 +1,45 @@
+services:
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: mysql://tripforge:tripforge@db:3306/tripforge
+      JWT_SECRET: change_me_in_production
+      ENCRYPTION_KEY: change_me_32_chars_minimum_here_x
+      ACCESS_TOKEN_TTL: "1800"
+      REFRESH_TOKEN_TTL: "1209600"
+      PORT: "3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      start_period: 15s
+      retries: 5
+    restart: unless-stopped
+    volumes:
+      - ./uploads:/app/uploads
+      - ./exports:/app/exports
+      - ./models:/app/models
+    command: sh -c "npx prisma migrate deploy && node dist/server.js"
+
+  db:
+    image: mysql:8
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_USER: tripforge
+      MYSQL_PASSWORD: tripforge
+      MYSQL_DATABASE: tripforge
+      MYSQL_ROOT_PASSWORD: rootpassword
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 10
+    volumes:
+      - mysqldata:/var/lib/mysql
+
+volumes:
+  mysqldata:

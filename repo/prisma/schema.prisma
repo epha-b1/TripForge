@@ -1,0 +1,387 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../src/models/prisma"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String   @db.VarChar(255)
+  detail    Json?
+  traceId   String?  @db.VarChar(36) @map("trace_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("audit_logs")
+  @@index([createdAt])
+  @@index([traceId])
+}
+
+model User {
+  id                String             @id @default(uuid())
+  username          String             @unique @db.VarChar(255)
+  passwordHash      String             @db.VarChar(255) @map("password_hash")
+  role              String             @default("organizer") @db.VarChar(50)
+  status            String             @default("active") @db.VarChar(20)
+  failedAttempts    Int                @default(0) @map("failed_attempts")
+  lockedUntil       DateTime?          @map("locked_until")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  devices           Device[]
+  refreshTokens     RefreshToken[]
+  securityQuestions SecurityQuestion[]
+  passwordHistory          PasswordHistory[]
+  userRoles                UserRole[]
+  itineraries              Itinerary[]
+  importBatches            ImportBatch[]
+  notifications            Notification[]
+  notificationSetting      UserNotificationSetting?
+
+  @@map("users")
+}
+
+model SecurityQuestion {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  question        String   @db.Text
+  answerEncrypted String   @db.Text @map("answer_encrypted")
+  createdAt       DateTime @default(now()) @map("created_at")
+  user            User     @relation(fields: [userId], references: [id])
+
+  @@map("security_questions")
+}
+
+model Device {
+  id              String         @id @default(uuid())
+  userId          String         @map("user_id")
+  fingerprintHash String         @db.VarChar(255) @map("fingerprint_hash")
+  lastSeenAt      DateTime       @map("last_seen_at")
+  lastKnownCity   String?        @db.VarChar(255) @map("last_known_city")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  user            User           @relation(fields: [userId], references: [id])
+  refreshTokens   RefreshToken[]
+
+  @@unique([userId, fingerprintHash])
+  @@map("devices")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  deviceId  String    @map("device_id")
+  tokenHash String    @db.VarChar(255) @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  user      User      @relation(fields: [userId], references: [id])
+  device    Device    @relation(fields: [deviceId], references: [id])
+
+  @@map("refresh_tokens")
+}
+
+model PasswordHistory {
+  id           String   @id @default(uuid())
+  userId       String   @map("user_id")
+  passwordHash String   @db.VarChar(255) @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  user         User     @relation(fields: [userId], references: [id])
+
+  @@map("password_history")
+}
+
+model Role {
+  id                   String                @id @default(uuid())
+  name                 String                @unique @db.VarChar(255)
+  description          String?               @db.Text
+  createdAt            DateTime              @default(now()) @map("created_at")
+  rolePermissionPoints RolePermissionPoint[]
+  userRoles            UserRole[]
+
+  @@map("roles")
+}
+
+model PermissionPoint {
+  id                   String                @id @default(uuid())
+  code                 String                @unique @db.VarChar(255)
+  description          String?               @db.Text
+  createdAt            DateTime              @default(now()) @map("created_at")
+  rolePermissionPoints RolePermissionPoint[]
+  menuPermissionPoints MenuPermissionPoint[]
+
+  @@map("permission_points")
+}
+
+model Menu {
+  id                   String                @id @default(uuid())
+  name                 String                @unique @db.VarChar(255)
+  description          String?               @db.Text
+  createdAt            DateTime              @default(now()) @map("created_at")
+  menuPermissionPoints MenuPermissionPoint[]
+
+  @@map("menus")
+}
+
+model MenuPermissionPoint {
+  menuId            String @map("menu_id")
+  permissionPointId String @map("permission_point_id")
+  menu              Menu            @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  permissionPoint   PermissionPoint @relation(fields: [permissionPointId], references: [id], onDelete: Cascade)
+
+  @@id([menuId, permissionPointId])
+  @@map("menu_permission_points")
+}
+
+model RolePermissionPoint {
+  roleId            String @map("role_id")
+  permissionPointId String @map("permission_point_id")
+  role              Role            @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionPoint   PermissionPoint @relation(fields: [permissionPointId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionPointId])
+  @@map("role_permission_points")
+}
+
+model UserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+model Resource {
+  id              String            @id @default(uuid())
+  name            String            @db.VarChar(255)
+  type            String            @db.VarChar(50)
+  streetLine      String?           @db.VarChar(255) @map("street_line")
+  city            String?           @db.VarChar(255)
+  region          String?           @db.VarChar(255)
+  country         String?           @db.VarChar(255)
+  latitude        Decimal?          @db.Decimal(10, 7)
+  longitude       Decimal?          @db.Decimal(10, 7)
+  minDwellMinutes Int               @default(30) @map("min_dwell_minutes")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  hours           ResourceHour[]
+  closures        ResourceClosure[]
+  travelTimesFrom TravelTimeMatrix[] @relation("from_resource")
+  travelTimesTo   TravelTimeMatrix[] @relation("to_resource")
+  itineraryItems  ItineraryItem[]
+
+  @@map("resources")
+}
+
+model ResourceHour {
+  id         String   @id @default(uuid())
+  resourceId String   @map("resource_id")
+  dayOfWeek  Int      @map("day_of_week")
+  openTime   String   @db.VarChar(5) @map("open_time")
+  closeTime  String   @db.VarChar(5) @map("close_time")
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@map("resource_hours")
+}
+
+model ResourceClosure {
+  id         String   @id @default(uuid())
+  resourceId String   @map("resource_id")
+  date       DateTime @db.Date
+  reason     String?  @db.VarChar(255)
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@map("resource_closures")
+}
+
+model TravelTimeMatrix {
+  id             String   @id @default(uuid())
+  fromResourceId String   @map("from_resource_id")
+  toResourceId   String   @map("to_resource_id")
+  travelMinutes  Int      @map("travel_minutes")
+  transportMode  String   @default("walking") @db.VarChar(20) @map("transport_mode")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  fromResource   Resource @relation("from_resource", fields: [fromResourceId], references: [id], onDelete: Cascade)
+  toResource     Resource @relation("to_resource", fields: [toResourceId], references: [id], onDelete: Cascade)
+
+  @@unique([fromResourceId, toResourceId, transportMode])
+  @@map("travel_time_matrices")
+}
+
+model Itinerary {
+  id             String             @id @default(uuid())
+  ownerId        String             @map("owner_id")
+  title          String             @db.VarChar(255)
+  destination    String?            @db.VarChar(255)
+  startDate      DateTime?          @db.Date @map("start_date")
+  endDate        DateTime?          @db.Date @map("end_date")
+  status         String             @default("draft") @db.VarChar(20)
+  shareToken     String?            @unique @db.VarChar(255) @map("share_token")
+  shareExpiresAt DateTime?          @map("share_expires_at")
+  createdAt      DateTime           @default(now()) @map("created_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+  owner          User               @relation(fields: [ownerId], references: [id])
+  items          ItineraryItem[]
+  versions       ItineraryVersion[]
+
+  @@index([ownerId])
+  @@map("itineraries")
+}
+
+model ItineraryVersion {
+  id            String    @id @default(uuid())
+  itineraryId   String    @map("itinerary_id")
+  versionNumber Int       @map("version_number")
+  snapshot      Json
+  diffMetadata  Json?     @map("diff_metadata")
+  createdBy     String    @map("created_by")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  itinerary     Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+
+  @@unique([itineraryId, versionNumber])
+  @@map("itinerary_versions")
+}
+
+model ItineraryItem {
+  id           String    @id @default(uuid())
+  itineraryId  String    @map("itinerary_id")
+  resourceId   String    @map("resource_id")
+  dayNumber    Int       @map("day_number")
+  startTime    String    @db.VarChar(5) @map("start_time")
+  endTime      String    @db.VarChar(5) @map("end_time")
+  notes        String?   @db.Text
+  position     Int       @default(0)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  itinerary    Itinerary @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  resource     Resource  @relation(fields: [resourceId], references: [id])
+
+  @@map("itinerary_items")
+}
+
+model ImportBatch {
+  id             String        @id @default(uuid())
+  userId         String        @map("user_id")
+  entityType     String        @db.VarChar(100) @map("entity_type")
+  status         String        @default("pending") @db.VarChar(20)
+  totalRows      Int           @default(0) @map("total_rows")
+  successRows    Int           @default(0) @map("success_rows")
+  errorRows      Int           @default(0) @map("error_rows")
+  idempotencyKey String        @unique @db.VarChar(255) @map("idempotency_key")
+  rollbackUntil  DateTime      @map("rollback_until")
+  validatedData  Json?         @map("validated_data")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  completedAt    DateTime?     @map("completed_at")
+  user           User          @relation(fields: [userId], references: [id])
+  errors         ImportError[]
+
+  @@map("import_batches")
+}
+
+model ImportError {
+  id        String      @id @default(uuid())
+  batchId   String      @map("batch_id")
+  rowNumber Int         @map("row_number")
+  field     String?     @db.VarChar(255)
+  message   String      @db.Text
+  rawData   Json?       @map("raw_data")
+  batch     ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@map("import_errors")
+}
+
+model MlModel {
+  id            String         @id @default(uuid())
+  name          String         @db.VarChar(255)
+  version       String         @db.VarChar(50)
+  type          String         @db.VarChar(20)
+  status        String         @default("inactive") @db.VarChar(20)
+  filePath      String?        @db.VarChar(500) @map("file_path")
+  config        Json?
+  createdAt     DateTime       @default(now()) @map("created_at")
+  abAllocations AbAllocation[]
+
+  @@unique([name, version])
+  @@map("ml_models")
+}
+
+model AbAllocation {
+  id         String   @id @default(uuid())
+  modelId    String   @map("model_id")
+  groupName  String   @db.VarChar(100) @map("group_name")
+  percentage Decimal  @db.Decimal(5, 2)
+  createdAt  DateTime @default(now()) @map("created_at")
+  model      MlModel  @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@map("ab_allocations")
+}
+
+model NotificationTemplate {
+  id            String         @id @default(uuid())
+  code          String         @unique @db.VarChar(255)
+  subject       String?        @db.VarChar(500)
+  body          String         @db.Text
+  createdAt     DateTime       @default(now()) @map("created_at")
+  notifications Notification[]
+
+  @@map("notification_templates")
+}
+
+model Notification {
+  id          String                @id @default(uuid())
+  userId      String                @map("user_id")
+  templateId  String?               @map("template_id")
+  type        String                @db.VarChar(100)
+  subject     String?               @db.VarChar(500)
+  message     String                @db.Text
+  read        Boolean               @default(false)
+  delivered   Boolean               @default(false)
+  retryCount  Int                   @default(0) @map("retry_count")
+  nextRetryAt DateTime?             @map("next_retry_at")
+  createdAt   DateTime              @default(now()) @map("created_at")
+  user        User                  @relation(fields: [userId], references: [id])
+  template    NotificationTemplate? @relation(fields: [templateId], references: [id])
+  outbox      OutboxMessage?
+
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+model OutboxMessage {
+  id             String       @id @default(uuid())
+  notificationId String       @unique @map("notification_id")
+  status         String       @default("pending") @db.VarChar(20)
+  attempts       Int          @default(0)
+  lastError      String?      @db.Text @map("last_error")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  deliveredAt    DateTime?    @map("delivered_at")
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@map("outbox_messages")
+}
+
+model UserNotificationSetting {
+  userId      String   @id @map("user_id")
+  blacklisted Boolean  @default(false)
+  dailyCap    Int      @default(20) @map("daily_cap")
+  dailySent   Int      @default(0) @map("daily_sent")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("user_notification_settings")
+}
+
+model IdempotencyKey {
+  key           String   @id @db.VarChar(255)
+  operationType String   @db.VarChar(100) @map("operation_type")
+  responseBody  Json     @map("response_body")
+  createdAt     DateTime @default(now()) @map("created_at")
+  expiresAt     DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}

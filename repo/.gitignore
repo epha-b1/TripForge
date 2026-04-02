@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+uploads/*
+exports/*
+models/*
+!uploads/.gitkeep
+!exports/.gitkeep
+!models/.gitkeep
