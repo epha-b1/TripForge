@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware, requirePermission } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
-import { createResourceSchema, businessHoursSchema, closureSchema, travelTimeSchema } from '../schemas/resource.schemas';
+import { createResourceSchema, updateResourceSchema, businessHoursSchema, closureSchema, travelTimeSchema } from '../schemas/resource.schemas';
 import {
   createResourceHandler,
   listResourcesHandler,
@@ -23,7 +23,7 @@ router.use(authMiddleware);
 router.get('/', listResourcesHandler);
 router.post('/', requirePermission('resource:write'), validate(createResourceSchema), createResourceHandler);
 router.get('/:id', getResourceHandler);
-router.patch('/:id', requirePermission('resource:write'), updateResourceHandler);
+router.patch('/:id', requirePermission('resource:write'), validate(updateResourceSchema), updateResourceHandler);
 router.delete('/:id', requirePermission('resource:delete'), deleteResourceHandler);
 
 router.get('/:id/hours', getBusinessHoursHandler);

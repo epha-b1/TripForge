@@ -124,12 +124,26 @@ Every non-2xx response returns:
 ```
 
 `requestId` is the canonical correlation field and always equals the
-`X-Request-Id` response header. The header `X-Trace-Id` and the body field
-`traceId` are kept temporarily as backwards-compatible aliases — new clients
-should use `requestId` only.
+`X-Request-Id` response header.
 
-If a client supplies `X-Request-Id` (or the legacy `X-Trace-Id`) on the
-request, the server echoes that exact value back instead of generating one.
+#### `traceId` / `X-Trace-Id` deprecation timeline
+
+The body field `traceId` and the response header `X-Trace-Id` are kept as
+deprecated aliases on the same value as `requestId` / `X-Request-Id`:
+
+| Phase | TripForge release | Behaviour |
+|---|---|---|
+| **Now (deprecated alias)** | this release | Both fields/headers are written on every response and the server still accepts incoming `X-Trace-Id` request headers. Logs warn callers to migrate. |
+| **Removal** | the next major release after every documented client has migrated | Server stops writing `traceId` in error bodies and stops sending `X-Trace-Id`; the request-side alias is still accepted for one further release. |
+| **Final** | one release after Removal | All `trace*` aliases are dropped from request and response paths. |
+
+New clients **must** use `requestId` / `X-Request-Id` only. The contract test
+at `unit_tests/contract_sync.spec.ts` enforces that the canonical field is the
+required field in the OpenAPI `Error` schema.
+
+If a client supplies `X-Request-Id` (or, during the deprecation window, the
+legacy `X-Trace-Id`) on the request, the server echoes that exact value back
+instead of generating one.
 
 ### Idempotency (mandatory)
 

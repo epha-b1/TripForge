@@ -144,6 +144,47 @@ describe('PATCH /resources/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.city).toBe('UpdatedCity');
   });
+
+  it('400 VALIDATION_ERROR — empty PATCH body', async () => {
+    const res = await request(app)
+      .patch(`/resources/${resourceId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.body.requestId).toBeDefined();
+  });
+
+  it('400 VALIDATION_ERROR — non-canonical type on PATCH', async () => {
+    const res = await request(app)
+      .patch(`/resources/${resourceId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ type: 'restaurant' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('400 VALIDATION_ERROR — out-of-range latitude on PATCH', async () => {
+    const res = await request(app)
+      .patch(`/resources/${resourceId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ latitude: 999 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+
+  it('400 VALIDATION_ERROR — unknown field on PATCH (strict schema)', async () => {
+    const res = await request(app)
+      .patch(`/resources/${resourceId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ totallyMadeUpField: 'x' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
 });
 
 describe('POST /resources/:id/hours', () => {

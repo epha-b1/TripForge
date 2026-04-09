@@ -310,24 +310,58 @@ user_notification_settings
 
 ```
 audit_logs
-  id            varchar(36) PK
-  actor_id      varchar(36) FK users
-  action        varchar(255) NOT NULL
-  resource_type varchar(100)
-  resource_id   varchar(36)
-  detail        json
-  request_id    varchar(36)
-  ip_address    varchar(45)
-  created_at    datetime NOT NULL
-  -- INSERT only, no UPDATE/DELETE for app DB role
+  id          varchar(36) PK
+  action      varchar(255) NOT NULL          -- e.g. resource.create, model.infer, user.login
+  detail      json                            -- structured payload (see below)
+  trace_id    varchar(36)                     -- equals the request's canonical requestId
+  created_at  datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+  INDEX (created_at)
+  INDEX (trace_id)
+  -- INSERT-only at the DB layer. Migration 20260409000000_audit_immutability
+  -- installs BEFORE UPDATE / BEFORE DELETE triggers that raise SQLSTATE 45000.
 
 idempotency_keys
   key            varchar(255) PK
   operation_type varchar(100) NOT NULL
-  response_body  json NOT NULL
+  response_body  json NOT NULL                -- includes _fingerprint, _actor, _statusCode, _body
   created_at     datetime NOT NULL
-  expires_at     datetime NOT NULL             -- created_at + 24h
+  expires_at     datetime NOT NULL            -- created_at + 24h
+  INDEX (expires_at)
 ```
+
+#### Audit `detail` JSON shape
+
+The `detail` JSON column carries the structured payload that older designs put
+in dedicated columns. Every audit row written through `services/audit.service.ts`
+contains at least:
+
+```json
+{
+  "actorId":      "<uuid of acting user, or 'anonymous'>",
+  "resourceType": "<resource | itinerary | model | notification_template | ...>",
+  "resourceId":   "<uuid>",
+  "...":          "action-specific extras (e.g. {name, type} for resource.create)"
+}
+```
+
+`trace_id` carries the canonical request id. The application audit query
+endpoint accepts `actorId` and `resourceType` filters and translates them into
+JSON-path predicates over `detail` (`detail->>'$.actorId'` /
+`detail->>'$.resourceType'`), so callers see a flat query model even though
+storage is JSON. This indirection is the deliberate trade-off chosen to keep
+audit append latency low and the table cheap to migrate when new actions are
+added.
+
+Why no separate columns?
+
+- Adding columns means a schema migration every time a new audit dimension is
+  introduced; the JSON model lets `audit()` callers pass extras without DDL.
+- The two filters that *do* matter for compliance queries (`actorId`,
+  `resourceType`) are surfaced via JSON path expressions in
+  `audit.service.ts:buildWhereClause`, which MySQL 8 / MariaDB 11 evaluate
+  efficiently.
+- `trace_id` is structural (tight join key for cross-system correlation) so it
+  remains a top-level column with its own index.
 
 ---
 
@@ -480,8 +514,13 @@ Rules:
   request; the server echoes that exact value back instead of generating a
   fresh one. This applies to both success and error responses.
 - The body field `traceId` and the response header `X-Trace-Id` are kept as
-  backwards-compatible aliases for existing clients. New integrations should
-  use `requestId` only.
+  **deprecated aliases** for existing clients. They carry the same value as
+  `requestId` / `X-Request-Id`. New integrations must not use them.
+
+  Deprecation timeline:
+    1. *This release* — both names emitted on every response, both accepted on requests.
+    2. *Next major release* — `traceId` body field and `X-Trace-Id` response header are removed; the request-side alias is still accepted for one further release.
+    3. *Release after that* — all `trace*` aliases are dropped from request and response paths.
 
 Standard codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED` (401), `FORBIDDEN`
 (403), `NOT_FOUND` (404), `CONFLICT` (409), `IDEMPOTENCY_CONFLICT` (409),

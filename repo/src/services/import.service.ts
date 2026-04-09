@@ -52,6 +52,47 @@ const ITINERARY_COLUMNS = [
 const RESOURCE_REQUIRED_FIELDS = ['name', 'type'];
 const ITINERARY_REQUIRED_FIELDS = ['title'];
 
+/**
+ * Default dedup field set used when the client doesn't supply
+ * `deduplicationKey`. Documented in docs/api-spec.md and README.md.
+ */
+export const DEFAULT_RESOURCE_DEDUP_FIELDS = ['name', 'streetLine', 'city'] as const;
+
+/**
+ * Parse the multipart `deduplicationKey` field into an ordered list of
+ * resource columns to dedup by.
+ *
+ * Canonical format is comma-separated:
+ *
+ *     name,streetLine,city
+ *
+ * For backwards compatibility we also accept the legacy `+` separator that
+ * an earlier release used:
+ *
+ *     name+streetLine+city
+ *
+ * Whitespace around segments is tolerated, empty segments are dropped, and
+ * an empty/missing key falls back to {@link DEFAULT_RESOURCE_DEDUP_FIELDS}.
+ *
+ * Exported so the unit suite can pin the parser behaviour without having to
+ * spin up a real upload.
+ */
+export function parseDeduplicationKey(rawKey: string | null | undefined): string[] {
+  if (!rawKey) return [...DEFAULT_RESOURCE_DEDUP_FIELDS];
+  const trimmed = rawKey.trim();
+  if (trimmed === '') return [...DEFAULT_RESOURCE_DEDUP_FIELDS];
+
+  // Accept either separator. We split on both so a hypothetical mixed string
+  // ("name,streetLine+city") still degrades gracefully into the three fields
+  // it obviously meant.
+  const parts = trimmed
+    .split(/[,+]/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+
+  return parts.length > 0 ? parts : [...DEFAULT_RESOURCE_DEDUP_FIELDS];
+}
+
 /* ---------- Helpers ---------- */
 
 function getColumnsForEntity(entityType: string) {
@@ -276,10 +317,19 @@ export async function uploadAndValidate(
     allErrors.push(...rowErrors);
   }
 
-  // Deduplication check against DB
-  const dedupKey = deduplicationKey;
+  // Deduplication check against DB.
+  //
+  // Canonical format for the `deduplicationKey` form field is COMMA-separated
+  // (matches docs/api-spec.md and the new dedup parser test):
+  //
+  //     deduplicationKey=name,streetLine,city
+  //
+  // Earlier code parsed `+` as the separator, which produced silent dedup
+  // misses for any client that followed the documented format. We now treat
+  // both as valid (legacy `+` is accepted for backwards compatibility) so
+  // upgrades don't break existing clients, but the canonical separator is `,`.
   if (entityType === 'resources') {
-    const dedupFields = dedupKey ? dedupKey.split('+') : ['name', 'streetLine', 'city'];
+    const dedupFields = parseDeduplicationKey(deduplicationKey);
     for (const vr of validatedRows) {
       if (!vr.valid) continue;
 
@@ -299,7 +349,7 @@ export async function uploadAndValidate(
         if (existing) {
           const err: RowError = {
             rowNumber: vr.rowNumber,
-            field: dedupFields.join('+'),
+            field: dedupFields.join(','),
             message: `Duplicate: a resource with the same ${dedupFields.join(', ')} already exists`,
             rawData: vr.data,
           };

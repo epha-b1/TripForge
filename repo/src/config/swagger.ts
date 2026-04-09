@@ -26,8 +26,8 @@ export const apiSpec: any = {
           statusCode: { type: 'integer' },
           code: { type: 'string' },
           message: { type: 'string' },
-          requestId: { type: 'string', description: 'Per-request correlation id; matches the X-Request-Id response header.' },
-          traceId: { type: 'string', description: 'Deprecated alias for requestId — kept temporarily for backwards compatibility.' },
+          requestId: { type: 'string', description: 'Per-request correlation id; matches the X-Request-Id response header. Always present on every error response.' },
+          traceId: { type: 'string', description: 'DEPRECATED alias for requestId. Carries the same value. Will be removed in the next major release; new clients must use requestId only.' },
           details: { type: 'object', description: 'Additional context (e.g. device list on 409)' },
         },
       },
@@ -381,7 +381,7 @@ export const apiSpec: any = {
     '/import/upload': {
       post: {
         tags: ['Import'], summary: 'Upload file for bulk import (pre-validation)',
-        requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['file', 'entityType', 'idempotencyKey'], properties: { file: { type: 'string', format: 'binary' }, entityType: { type: 'string' }, idempotencyKey: { type: 'string' }, deduplicationKey: { type: 'string' } } } } } },
+        requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', required: ['file', 'entityType', 'idempotencyKey'], properties: { file: { type: 'string', format: 'binary' }, entityType: { type: 'string' }, idempotencyKey: { type: 'string' }, deduplicationKey: { type: 'string', description: 'Comma-separated field list for resource dedup (canonical, e.g. `name,streetLine,city`). Legacy `+` separator is still accepted but deprecated. Default: `name,streetLine,city`.' } } } } } },
         responses: { '200': { description: 'Validation report with row-level errors' } },
       },
     },

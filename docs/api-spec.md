@@ -39,7 +39,11 @@ components:
           description: Per-request correlation id; matches the X-Request-Id response header.
         traceId:
           type: string
-          description: Deprecated alias for requestId — kept temporarily for backwards compatibility with older clients.
+          description: |
+            DEPRECATED alias for requestId. Carries the same value. Will be
+            removed in the next major release; new clients must use requestId
+            only. The deprecation timeline is documented in README.md and
+            docs/design.md.
         details:
           type: object
           description: Optional structured context (validation errors, device list on 409, etc.).
@@ -1049,7 +1053,12 @@ paths:
                   type: string
                 deduplicationKey:
                   type: string
-                  description: Comma-separated field names for dedup (default name,streetLine,city)
+                  description: |
+                    Ordered field list for resource dedup. Canonical format is
+                    comma-separated, e.g. `name,streetLine,city`. The legacy
+                    `+` separator (e.g. `name+streetLine+city`) is still
+                    accepted for backwards compatibility but is deprecated.
+                    Default when omitted: `name,streetLine,city`.
       responses:
         "200":
           description: Validation report with row-level errors

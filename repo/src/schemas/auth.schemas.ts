@@ -34,3 +34,7 @@ export const recoverSchema = z.object({
 export const refreshSchema = z.object({
   refreshToken: z.string().min(1, 'Refresh token is required'),
 });
+
+// Logout shares the same body shape as refresh: a single required string.
+// Aliased for clarity at the route declaration.
+export const logoutSchema = refreshSchema;

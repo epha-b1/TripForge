@@ -15,6 +15,7 @@
  */
 
 import * as importService from '../src/services/import.service';
+import { parseDeduplicationKey, DEFAULT_RESOURCE_DEDUP_FIELDS } from '../src/services/import.service';
 import { getPrisma } from '../src/config/database';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -132,6 +133,44 @@ describe('import.service.uploadAndValidate', () => {
 
     expect(result).toBe(existing);
     expect(prisma.importBatch.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('import.service.parseDeduplicationKey — format compatibility', () => {
+  it('returns the documented default when nothing is supplied', () => {
+    expect(parseDeduplicationKey(undefined)).toEqual([...DEFAULT_RESOURCE_DEDUP_FIELDS]);
+    expect(parseDeduplicationKey(null)).toEqual([...DEFAULT_RESOURCE_DEDUP_FIELDS]);
+    expect(parseDeduplicationKey('')).toEqual([...DEFAULT_RESOURCE_DEDUP_FIELDS]);
+    expect(parseDeduplicationKey('   ')).toEqual([...DEFAULT_RESOURCE_DEDUP_FIELDS]);
+  });
+
+  it('parses the canonical comma-separated format', () => {
+    expect(parseDeduplicationKey('name,streetLine,city')).toEqual([
+      'name',
+      'streetLine',
+      'city',
+    ]);
+    expect(parseDeduplicationKey('name, country')).toEqual(['name', 'country']);
+  });
+
+  it('still accepts the legacy `+` format for backwards compatibility', () => {
+    expect(parseDeduplicationKey('name+streetLine+city')).toEqual([
+      'name',
+      'streetLine',
+      'city',
+    ]);
+  });
+
+  it('tolerates a mixed delimiter and trims whitespace', () => {
+    expect(parseDeduplicationKey(' name , streetLine + city ')).toEqual([
+      'name',
+      'streetLine',
+      'city',
+    ]);
+  });
+
+  it('drops empty segments', () => {
+    expect(parseDeduplicationKey(',name,,city,')).toEqual(['name', 'city']);
   });
 });
 

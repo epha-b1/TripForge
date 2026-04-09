@@ -21,10 +21,35 @@ export const createResourceSchema = z.object({
   city: z.string().optional(),
   region: z.string().optional(),
   country: z.string().optional(),
-  latitude: z.number().optional(),
-  longitude: z.number().optional(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
   minDwellMinutes: z.number().int().min(1).optional(),
 });
+
+/**
+ * Partial update schema for PATCH /resources/:id.
+ *
+ * Every field is optional but, when present, must satisfy the same constraints
+ * as the create path. We additionally require at least one field so a totally
+ * empty PATCH body fails fast with VALIDATION_ERROR instead of silently
+ * succeeding with no-op.
+ */
+export const updateResourceSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    type: z.enum(RESOURCE_TYPES).optional(),
+    streetLine: z.string().nullable().optional(),
+    city: z.string().nullable().optional(),
+    region: z.string().nullable().optional(),
+    country: z.string().nullable().optional(),
+    latitude: z.number().min(-90).max(90).nullable().optional(),
+    longitude: z.number().min(-180).max(180).nullable().optional(),
+    minDwellMinutes: z.number().int().min(1).optional(),
+  })
+  .strict()
+  .refine((obj) => Object.keys(obj).length > 0, {
+    message: 'At least one field must be provided',
+  });
 
 export const businessHoursSchema = z.object({
   dayOfWeek: z.number().int().min(0).max(6),

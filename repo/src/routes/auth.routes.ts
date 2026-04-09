@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
-import { registerSchema, loginSchema, changePasswordSchema, recoverSchema, refreshSchema } from '../schemas/auth.schemas';
+import { registerSchema, loginSchema, changePasswordSchema, recoverSchema, refreshSchema, logoutSchema } from '../schemas/auth.schemas';
 import {
   registerHandler,
   loginHandler,
@@ -23,7 +23,7 @@ router.post('/refresh', validate(refreshSchema), refreshHandler);
 router.post('/recover', validate(recoverSchema), recoverHandler);
 
 // Protected endpoints
-router.post('/logout', authMiddleware, logoutHandler);
+router.post('/logout', authMiddleware, validate(logoutSchema), logoutHandler);
 router.patch('/change-password', authMiddleware, validate(changePasswordSchema), changePasswordHandler);
 router.get('/me', authMiddleware, getMeHandler);
 router.get('/devices', authMiddleware, getDevicesHandler);

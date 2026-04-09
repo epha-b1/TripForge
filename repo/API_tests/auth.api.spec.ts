@@ -159,6 +159,41 @@ describe('POST /auth/logout', () => {
     const refreshRes = await request(app).post('/auth/refresh').set('Idempotency-Key', uuid()).send({ refreshToken: logoutRefresh });
     expect(refreshRes.status).toBe(401);
   });
+
+  it('400 VALIDATION_ERROR — missing refreshToken in body', async () => {
+    // Re-login to get a fresh token (the previous test consumed access tokens too).
+    const loginRes = await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send({
+      username: validUser.username,
+      password: validUser.password,
+    });
+    const freshAccess = loginRes.body.accessToken;
+
+    const res = await request(app)
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${freshAccess}`)
+      .set('Idempotency-Key', uuid())
+      .send({});
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.body.requestId).toBeDefined();
+    expect(res.body.requestId).toBe(res.headers['x-request-id']);
+  });
+
+  it('400 VALIDATION_ERROR — empty refreshToken string', async () => {
+    const loginRes = await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send({
+      username: validUser.username,
+      password: validUser.password,
+    });
+    const freshAccess = loginRes.body.accessToken;
+
+    const res = await request(app)
+      .post('/auth/logout')
+      .set('Authorization', `Bearer ${freshAccess}`)
+      .set('Idempotency-Key', uuid())
+      .send({ refreshToken: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
 });
 
 describe('GET /auth/me', () => {
