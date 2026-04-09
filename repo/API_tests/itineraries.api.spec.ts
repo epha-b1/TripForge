@@ -188,6 +188,118 @@ describe('GET /itineraries/:id/versions', () => {
   });
 });
 
+// === Versioning semantics ===
+// Business rules under test:
+//   1. POST /itineraries creates a version 1 snapshot at creation time.
+//   2. PATCH /itineraries/:id with ONLY status change does NOT create a new version.
+//   3. PATCH /itineraries/:id that mutates content fields (title/destination/dates)
+//      DOES create a new version.
+describe('Itinerary versioning semantics', () => {
+  let verItinId: string;
+
+  afterAll(async () => {
+    if (verItinId) {
+      await prisma.itineraryItem.deleteMany({ where: { itineraryId: verItinId } }).catch(() => {});
+      await prisma.itineraryVersion.deleteMany({ where: { itineraryId: verItinId } }).catch(() => {});
+      await prisma.itinerary.deleteMany({ where: { id: verItinId } }).catch(() => {});
+    }
+  });
+
+  it('initial create — produces version 1', async () => {
+    const createRes = await request(app)
+      .post('/itineraries')
+      .set('Authorization', `Bearer ${orgAToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({
+        title: `Versioning Trip ${ts}_${uuid()}`,
+        destination: 'VerCity',
+        startDate: '2026-07-01',
+        endDate: '2026-07-05',
+      });
+    expect(createRes.status).toBe(201);
+    verItinId = createRes.body.id;
+
+    const versionsRes = await request(app)
+      .get(`/itineraries/${verItinId}/versions`)
+      .set('Authorization', `Bearer ${orgAToken}`);
+    expect(versionsRes.status).toBe(200);
+    expect(Array.isArray(versionsRes.body)).toBe(true);
+    expect(versionsRes.body.length).toBe(1);
+    expect(versionsRes.body[0].versionNumber).toBe(1);
+    // Snapshot captures the (empty) items list at creation time.
+    expect(Array.isArray(versionsRes.body[0].snapshot)).toBe(true);
+    expect(versionsRes.body[0].snapshot.length).toBe(0);
+  });
+
+  it('PATCH status only — does NOT create a new version', async () => {
+    const before = await request(app)
+      .get(`/itineraries/${verItinId}/versions`)
+      .set('Authorization', `Bearer ${orgAToken}`);
+    const beforeCount = before.body.length;
+
+    const patchRes = await request(app)
+      .patch(`/itineraries/${verItinId}`)
+      .set('Authorization', `Bearer ${orgAToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ status: 'published' });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.status).toBe('published');
+
+    const after = await request(app)
+      .get(`/itineraries/${verItinId}/versions`)
+      .set('Authorization', `Bearer ${orgAToken}`);
+    expect(after.status).toBe(200);
+    expect(after.body.length).toBe(beforeCount);
+    // Highest versionNumber unchanged.
+    const maxBefore = Math.max(...before.body.map((v: { versionNumber: number }) => v.versionNumber));
+    const maxAfter = Math.max(...after.body.map((v: { versionNumber: number }) => v.versionNumber));
+    expect(maxAfter).toBe(maxBefore);
+  });
+
+  it('PATCH content (title) — DOES create a new version', async () => {
+    const before = await request(app)
+      .get(`/itineraries/${verItinId}/versions`)
+      .set('Authorization', `Bearer ${orgAToken}`);
+    const beforeCount = before.body.length;
+    const beforeMax = Math.max(...before.body.map((v: { versionNumber: number }) => v.versionNumber));
+
+    const patchRes = await request(app)
+      .patch(`/itineraries/${verItinId}`)
+      .set('Authorization', `Bearer ${orgAToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ title: `Versioning Trip Renamed ${ts}` });
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.title).toBe(`Versioning Trip Renamed ${ts}`);
+
+    const after = await request(app)
+      .get(`/itineraries/${verItinId}/versions`)
+      .set('Authorization', `Bearer ${orgAToken}`);
+    expect(after.status).toBe(200);
+    expect(after.body.length).toBe(beforeCount + 1);
+    const afterMax = Math.max(...after.body.map((v: { versionNumber: number }) => v.versionNumber));
+    expect(afterMax).toBe(beforeMax + 1);
+  });
+
+  it('PATCH content (destination) — DOES create a new version', async () => {
+    const before = await request(app)
+      .get(`/itineraries/${verItinId}/versions`)
+      .set('Authorization', `Bearer ${orgAToken}`);
+    const beforeCount = before.body.length;
+
+    const patchRes = await request(app)
+      .patch(`/itineraries/${verItinId}`)
+      .set('Authorization', `Bearer ${orgAToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ destination: 'NewDestinationCity' });
+    expect(patchRes.status).toBe(200);
+
+    const after = await request(app)
+      .get(`/itineraries/${verItinId}/versions`)
+      .set('Authorization', `Bearer ${orgAToken}`);
+    expect(after.body.length).toBe(beforeCount + 1);
+  });
+});
+
 describe('GET /itineraries/:id/optimize', () => {
   it('200 — returns suggestions', async () => {
     const res = await request(app)

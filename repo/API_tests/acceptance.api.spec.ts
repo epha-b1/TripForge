@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { v4 as uuid } from 'uuid';
+import { sign as jwtSign } from 'jsonwebtoken';
 import app from '../src/app';
 import { getPrisma } from '../src/config/database';
 
@@ -152,6 +153,97 @@ describe('Idempotency enforcement', () => {
 
     // cleanup
     await prisma.resource.deleteMany({ where: { name: { startsWith: `IdemA ${ts}` } } }).catch(() => {});
+  });
+
+  // === Auth-boundary replay regression ===
+  // A reused idempotency key MUST NOT allow an unauthenticated/forged caller
+  // to observe the cached success response of a real authenticated request
+  // on a protected mutating route. The middleware must reject with an auth
+  // failure (401/403) and the cached body must NOT be returned.
+  describe('Auth-boundary replay regression', () => {
+    let key: string;
+    let originalResourceId: string;
+    const originalBody = {
+      name: `IdemAuthBoundary_${ts}_${uuid()}`,
+      type: 'attraction',
+      city: 'BoundaryCity',
+    };
+
+    beforeAll(async () => {
+      key = uuid();
+      // Seed: legitimate admin POST that gets cached.
+      const res = await request(app)
+        .post('/resources')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Idempotency-Key', key)
+        .send(originalBody);
+      expect(res.status).toBe(201);
+      expect(res.body.id).toBeDefined();
+      originalResourceId = res.body.id;
+    });
+
+    afterAll(async () => {
+      if (originalResourceId) {
+        await prisma.resource.deleteMany({ where: { id: originalResourceId } }).catch(() => {});
+      }
+      await prisma.resource.deleteMany({ where: { name: { startsWith: `IdemAuthBoundary_${ts}` } } }).catch(() => {});
+      await prisma.idempotencyKey.deleteMany({ where: { key } }).catch(() => {});
+    });
+
+    it('401 — replay with NO bearer token returns auth failure, not cached body', async () => {
+      const res = await request(app)
+        .post('/resources')
+        .set('Idempotency-Key', key)
+        .send(originalBody);
+      expect([401, 403]).toContain(res.status);
+      // Critical: must NOT leak the cached resource id from the original
+      // authenticated call.
+      expect(res.body.id).toBeUndefined();
+      expect(res.body.id).not.toBe(originalResourceId);
+    });
+
+    it('401 — replay with malformed bearer returns auth failure, not cached body', async () => {
+      const res = await request(app)
+        .post('/resources')
+        .set('Authorization', 'Bearer not-a-real-jwt')
+        .set('Idempotency-Key', key)
+        .send(originalBody);
+      expect([401, 403]).toContain(res.status);
+      expect(res.body.id).toBeUndefined();
+      expect(res.body.id).not.toBe(originalResourceId);
+    });
+
+    it('401 — replay with forged bearer (wrong secret) returns auth failure, not cached body', async () => {
+      // Sign a token with the WRONG secret but a payload claiming to be admin.
+      // The previous (vulnerable) middleware fingerprinted using the unverified
+      // payload, so a forged token with the right userId would have hit the
+      // cache. Verifying the signature inside the middleware closes that gap.
+      const forged = jwtSign(
+        { userId: adminUserId, username: adminCreds.username, role: 'admin' },
+        'completely-wrong-secret-not-the-real-one',
+        { algorithm: 'HS256', expiresIn: 3600 },
+      );
+      const res = await request(app)
+        .post('/resources')
+        .set('Authorization', `Bearer ${forged}`)
+        .set('Idempotency-Key', key)
+        .send(originalBody);
+      expect([401, 403]).toContain(res.status);
+      expect(res.body.id).toBeUndefined();
+      expect(res.body.id).not.toBe(originalResourceId);
+    });
+
+    it('201 — legitimate admin replay still works (positive control)', async () => {
+      // Confirms the security fix did not break the existing same-actor
+      // same-payload replay semantics.
+      const res = await request(app)
+        .post('/resources')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .set('Idempotency-Key', key)
+        .send(originalBody);
+      expect(res.status).toBe(201);
+      expect(res.body.id).toBe(originalResourceId);
+    });
   });
 });
 

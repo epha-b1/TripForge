@@ -467,11 +467,15 @@ export async function removeDevice(userId: string, deviceId: string): Promise<vo
     throw new AppError(404, NOT_FOUND, 'Device not found');
   }
 
-  // Revoke all refresh tokens for this device
-  await prisma.refreshToken.updateMany({
-    where: { deviceId, revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
-
-  await prisma.device.delete({ where: { id: deviceId } });
+  // refresh_tokens.device_id has ON DELETE RESTRICT in MySQL — simply
+  // soft-revoking (setting revokedAt) leaves the rows in place and the
+  // subsequent device.delete() would fail with a FK constraint violation.
+  // Removing a device implies the user no longer authorizes any session
+  // bound to it, so deleting the refresh tokens (rather than just marking
+  // them revoked) is the correct semantic AND clears the FK so the device
+  // row can be removed atomically.
+  await prisma.$transaction([
+    prisma.refreshToken.deleteMany({ where: { deviceId } }),
+    prisma.device.delete({ where: { id: deviceId } }),
+  ]);
 }

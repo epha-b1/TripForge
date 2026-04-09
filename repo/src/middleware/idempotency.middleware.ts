@@ -1,9 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import { getPrisma } from '../config/database';
 import { Prisma } from '../models/prisma';
 import { logger } from '../utils/logger';
-import { IDEMPOTENCY_CONFLICT } from '../utils/errors';
+import { IDEMPOTENCY_CONFLICT, UNAUTHORIZED } from '../utils/errors';
+import { env } from '../config/environment';
+import { authConfig } from '../config/auth';
 
 const MUTATING_METHODS = new Set(['POST', 'PATCH', 'DELETE']);
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -20,15 +23,41 @@ function redactSecrets(obj: unknown): unknown {
   return out;
 }
 
-function buildFingerprint(req: Request): string {
+interface VerifiedActor {
+  /** Stable actor identifier used for fingerprinting and access control. */
+  actor: string;
+  /** True iff a Bearer token was provided AND its signature failed verification. */
+  invalid: boolean;
+}
+
+/**
+ * Resolve the requesting actor by *cryptographically verifying* the bearer token.
+ *
+ * Returning the unverified JWT payload (the previous behaviour) was the root
+ * cause of the auth-boundary replay risk: an attacker could forge a token whose
+ * payload claimed any user id, match the stored idempotency fingerprint, and
+ * receive the cached success response without ever proving their identity.
+ *
+ * - No bearer header                       → 'anonymous'
+ * - Bearer header with valid signature      → verified userId
+ * - Bearer header with invalid signature    → 'invalid' + invalid=true
+ */
+function resolveActor(req: Request): VerifiedActor {
   const authHeader = req.headers.authorization;
-  let actor = 'anonymous';
-  if (authHeader?.startsWith('Bearer ')) {
-    try {
-      const payload = JSON.parse(Buffer.from(authHeader.slice(7).split('.')[1], 'base64').toString());
-      actor = payload.userId || 'anonymous';
-    } catch { /* malformed token */ }
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return { actor: 'anonymous', invalid: false };
   }
+  try {
+    const payload = jwt.verify(authHeader.slice(7), env.jwtSecret, {
+      algorithms: [authConfig.algorithm],
+    }) as { userId?: string };
+    return { actor: payload.userId || 'anonymous', invalid: false };
+  } catch {
+    return { actor: 'invalid', invalid: true };
+  }
+}
+
+function buildFingerprint(req: Request, actor: string): string {
   const method = req.method;
   const route = req.originalUrl.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id');
   const bodyHash = req.body && Object.keys(req.body).length > 0
@@ -47,6 +76,18 @@ export async function idempotencyMiddleware(
     return;
   }
 
+  // Verify the bearer token (if any) BEFORE participating in idempotency.
+  // A request that presents an invalid/forged bearer must never be able to
+  // observe or overwrite a cached response that was produced for a real
+  // authenticated user. We pass it through so the downstream auth middleware
+  // returns 401 — the client gets a clear auth failure rather than a
+  // misleading replayed success.
+  const verified = resolveActor(req);
+  if (verified.invalid) {
+    next();
+    return;
+  }
+
   const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
   if (!idempotencyKey) {
     res.status(400).json({
@@ -58,7 +99,8 @@ export async function idempotencyMiddleware(
   }
 
   res.setHeader('Idempotency-Key', idempotencyKey);
-  const fingerprint = buildFingerprint(req);
+  const actor = verified.actor;
+  const fingerprint = buildFingerprint(req, actor);
 
   try {
     const prisma = getPrisma();
@@ -66,7 +108,35 @@ export async function idempotencyMiddleware(
 
     if (existing && existing.expiresAt > new Date()) {
       const stored = existing.responseBody as Record<string, unknown>;
+      const storedActor = stored._actor as string | undefined;
       const storedFingerprint = stored._fingerprint as string | undefined;
+
+      // Cross-actor protection: if the cached entry was produced for a
+      // verified user, only that same verified user is allowed to observe or
+      // overwrite the cache. Anyone else (anonymous, a different verified
+      // user) is treated as making a brand-new request that simply happens to
+      // share an opaque key — pass it through without serving cache and
+      // without poisoning the existing record.
+      if (storedActor && storedActor !== 'anonymous' && storedActor !== actor) {
+        if (actor === 'anonymous') {
+          // Protected route + cached entry belongs to someone else: short
+          // circuit with 401 so the client gets the right signal. (We can't
+          // continue to the route's auth middleware reliably because public
+          // routes also use this middleware; for those a missing token is
+          // fine, but if the cache is bound to an authenticated identity we
+          // know we're on a protected route.)
+          res.status(401).json({
+            statusCode: 401,
+            code: UNAUTHORIZED,
+            message: 'Authentication required',
+          });
+          return;
+        }
+        // Different verified user: don't replay, don't overwrite. Let the
+        // request execute fresh under its own identity.
+        next();
+        return;
+      }
 
       if (storedFingerprint && storedFingerprint !== fingerprint) {
         res.status(409).json({
@@ -98,17 +168,17 @@ export async function idempotencyMiddleware(
       // Still processing — let it through (dedup is best-effort for concurrent requests)
     }
 
-    // Reserve the key with fingerprint BEFORE processing to prevent races
+    // Reserve the key with fingerprint + actor BEFORE processing to prevent races
     await prisma.idempotencyKey.upsert({
       where: { key: idempotencyKey },
       update: {
-        responseBody: { _fingerprint: fingerprint, _statusCode: 0, _body: null } as unknown as Prisma.InputJsonValue,
+        responseBody: { _fingerprint: fingerprint, _actor: actor, _statusCode: 0, _body: null } as unknown as Prisma.InputJsonValue,
         expiresAt: new Date(Date.now() + TTL_MS),
       },
       create: {
         key: idempotencyKey,
         operationType: `${req.method} ${req.originalUrl.replace(/[0-9a-f-]{36}/gi, ':id')}`,
-        responseBody: { _fingerprint: fingerprint, _statusCode: 0, _body: null } as unknown as Prisma.InputJsonValue,
+        responseBody: { _fingerprint: fingerprint, _actor: actor, _statusCode: 0, _body: null } as unknown as Prisma.InputJsonValue,
         expiresAt: new Date(Date.now() + TTL_MS),
       },
     });
@@ -121,6 +191,7 @@ export async function idempotencyMiddleware(
         _statusCode: res.statusCode,
         _body: redactSecrets(body),
         _fingerprint: fingerprint,
+        _actor: actor,
       };
       // Update the reserved key with the actual response (fire-and-forget is OK now since key is already reserved)
       prisma.idempotencyKey.update({

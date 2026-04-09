@@ -214,7 +214,7 @@ export async function createItinerary(
   data: { title: string; destination?: string; startDate?: string | Date; endDate?: string | Date },
 ) {
   const prisma = getPrisma();
-  return prisma.itinerary.create({
+  const itinerary = await prisma.itinerary.create({
     data: {
       ownerId,
       title: data.title,
@@ -223,6 +223,10 @@ export async function createItinerary(
       endDate: data.endDate ? new Date(data.endDate) : undefined,
     },
   });
+  // Initial save = version 1. Captures the empty-items snapshot at creation
+  // time so the version history is well-defined from the very first read.
+  await createVersion(itinerary.id, ownerId);
+  return itinerary;
 }
 
 export async function listItineraries(
