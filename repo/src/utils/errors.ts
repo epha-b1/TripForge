@@ -22,6 +22,14 @@ export const RATE_LIMITED = 'RATE_LIMITED';
 export const INTERNAL_ERROR = 'INTERNAL_ERROR';
 
 /**
+ * Returned (HTTP 503) when an operator-provided runtime needed by an
+ * adapter is missing — currently only used by the ONNX adapter when the
+ * `onnxruntime` Python package is not installed in the API container. The
+ * message body explains the exact remediation.
+ */
+export const MODEL_RUNTIME_UNAVAILABLE = 'MODEL_RUNTIME_UNAVAILABLE';
+
+/**
  * Stable code returned by the unusual-location challenge ISSUANCE branch of
  * POST /auth/login. The HTTP status is 429, but semantically this is "an
  * extra step is required", not "you are being throttled" — that's

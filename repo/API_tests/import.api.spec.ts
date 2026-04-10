@@ -84,10 +84,17 @@ describe('GET /import/templates/:entityType', () => {
     expect(body).toMatch(/destination/);
   });
 
-  it('400 — rejects invalid format query param', async () => {
+  it('400 — rejects invalid format query param with canonical envelope', async () => {
     const res = await request(app)
       .get('/import/templates/resources?format=pdf');
     expect(res.status).toBe(400);
+    // Canonical envelope (statusCode / code / message / requestId) — the
+    // controller now routes this through AppError + global handler instead
+    // of returning an ad-hoc body. Audit follow-up.
+    expect(res.body.statusCode).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(res.body.message).toMatch(/format must be one of/i);
+    expect(res.body.requestId).toBeDefined();
   });
 });
 

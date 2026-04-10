@@ -117,10 +117,41 @@ docker run --rm -d -p 3000:3000 \
   --name tripforge-smoke tripforge
 # wait for /health
 curl -s http://localhost:3000/health
-
-# Compose-based dev test runner
-./run_tests.sh
 ```
+
+### Test suites (compose-based, no `.env`)
+
+The official test commands always pass **both** compose files. The default
+`docker-compose.yml` is production-shaped and refuses to start without
+host-environment secrets; the `docker-compose.test.yml` override layers in
+the throwaway `TEST_ONLY_NOT_FOR_PRODUCTION` credentials and switches
+`NODE_ENV=test`. There is no `.env` file involved.
+
+```bash
+# Bring the test stack up
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+
+# Wait for the API to be healthy
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  exec -T api wget -qO- http://localhost:3000/health
+
+# Unit tests
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  exec -T api npm run test:unit -- --runInBand
+
+# API integration tests
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  exec -T api npx jest --testPathPattern=API_tests --runInBand --no-cache
+
+# Tear down when done
+docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
+```
+
+> **Note on `run_tests.sh`** — the script in this repo invokes the
+> single-file `docker compose` command and is therefore *not* compatible
+> with the new compose split. It is preserved as-is for legacy callers but
+> should not be used; run the explicit commands above instead. Reviewers
+> should treat the snippet above as the canonical test invocation.
 
 ## Ports
 
@@ -238,7 +269,7 @@ deploy`.
 
 ### Model Adapter Mode
 
-- `NODE_ENV=production`: defaults to `process` mode (real PMML/ONNX/custom subprocess execution; fails fast if binaries unavailable)
+- `NODE_ENV=production`: defaults to `process` mode (real PMML/Custom subprocess execution; fails fast if binaries unavailable)
 - `NODE_ENV=test` or unset: defaults to `mock` mode (deterministic mock inference)
 - Override with `MODEL_ADAPTER_MODE=mock|process`
 
@@ -246,18 +277,47 @@ deploy`.
 
 The bundled single-container image (Dockerfile) installs:
 
-| Adapter | Binary | Alpine package | Allowlist entry |
-|---|---|---|---|
-| PMML / `pmml` | `/usr/bin/java` (symlink) | `openjdk17-jre-headless` | `/usr/bin/java` |
-| ONNX / `onnx` | `/usr/bin/python3` | `python3`, `py3-pip` | `/usr/bin/python3` |
-| Custom / `custom` | one of the above | — | strict allowlist |
+| Adapter | Binary | Alpine package | Allowlist entry | Out-of-the-box? |
+|---|---|---|---|---|
+| PMML / `pmml` | `/usr/bin/java` (symlink) | `openjdk17-jre-headless` | `/usr/bin/java` | ✅ runs, given a valid `.jar` / `.pmml` model |
+| ONNX / `onnx` | `/usr/bin/python3` | `python3`, `py3-pip` | `/usr/bin/python3` | ⚠️ python3 only — `onnxruntime` is **not** bundled (see below) |
+| Custom / `custom` | one of the above | — | strict allowlist | ✅ runs, given an allowlisted command |
 
-Both binaries are installed during `docker build`, so the production image
-boots straight into `process` mode without a `MODEL_ADAPTER_MODE=mock` escape
-hatch. `onnxruntime` itself is **not** preinstalled — operators wanting a
-real ONNX execution path must add it via `pip install onnxruntime` (or bake
-it into a derived image). Until they do, ONNX inference returns a clear
-runtime error rather than silently falling back to mock output.
+**ONNX runtime — operator-provided boundary (intentional).** The `onnxruntime`
+Python package is **not** bundled in the official image:
+
+- Alpine has no upstream `onnxruntime` binary wheel; bundling it would
+  either require switching the entire base image away from `node:20-alpine`
+  or building from source, both of which significantly bloat the image.
+- The boundary is therefore drawn at "we install python3, you install the
+  runtime if you need it".
+
+If an operator points the model registry at an ONNX model and the package
+is not present, `POST /models/{id}/infer` returns a canonical error envelope:
+
+```json
+{
+  "statusCode": 503,
+  "code": "MODEL_RUNTIME_UNAVAILABLE",
+  "message": "ONNX inference is unavailable: the `onnxruntime` Python package is not installed in the API container. ...",
+  "requestId": "..."
+}
+```
+
+Remediation options:
+
+1. `pip install onnxruntime` inside the container (or in a derived image
+   layer), then restart the API. The bundled `python3` is glibc-via-alpine
+   so a custom build/wheel may be required.
+2. Bake `onnxruntime` into a derived image: start `FROM tripforge` and add
+   the wheel via your platform's package manager.
+3. Set `MODEL_ADAPTER_MODE=mock` to fall back to deterministic mock
+   inference for development / acceptance tests.
+
+PMML and Custom adapter paths are unaffected — they work out of the box
+because Java + python3 are both bundled. The static code path that surfaces
+the missing-runtime AppError is exercised by
+`unit_tests/model_security.spec.ts`.
 
 ### Request Validation
 

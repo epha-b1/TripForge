@@ -5,6 +5,7 @@ import {
   NOT_FOUND,
   VALIDATION_ERROR,
   CONFLICT,
+  MODEL_RUNTIME_UNAVAILABLE,
 } from '../utils/errors';
 import crypto from 'crypto';
 import path from 'path';
@@ -148,6 +149,20 @@ export function validateModelFilePath(filePath: unknown, expectedExtensions: str
   return realCandidate;
 }
 
+/**
+ * Error thrown when a spawned adapter exits with a non-zero status. Carries
+ * the exit code and a captured stderr tail so callers can translate
+ * specific failure modes (e.g. ONNX runner exit code 3 for "onnxruntime not
+ * installed") into clean user-facing AppErrors instead of letting them
+ * surface as opaque 500s.
+ */
+export class AdapterProcessError extends Error {
+  constructor(public exitCode: number, public stderr: string) {
+    super(`Adapter process exited ${exitCode}: ${stderr.slice(0, 500)}`);
+    this.name = 'AdapterProcessError';
+  }
+}
+
 function spawnAdapter(executable: string, args: string[], input: string): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!ALLOWED_EXECUTABLES.some((allowed) => executable === allowed)) {
@@ -179,7 +194,7 @@ function spawnAdapter(executable: string, args: string[], input: string): Promis
     proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
     proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
     proc.on('close', (code: number) => {
-      if (code !== 0) reject(new Error(`Process exited ${code}: ${stderr.slice(0, 500)}`));
+      if (code !== 0) reject(new AdapterProcessError(code, stderr));
       else resolve(stdout);
     });
     proc.on('error', reject);
@@ -205,7 +220,29 @@ class OnnxAdapter implements ModelAdapter {
     const filePath = validateModelFilePath(rawFilePath, ['.onnx']);
     // Pass the path as a positional argument to a fixed runner script we
     // control. No string interpolation, no `python3 -c`, no shell.
-    const raw = await spawnAdapter('/usr/bin/python3', [ONNX_RUNNER, filePath], JSON.stringify(input));
+    let raw: string;
+    try {
+      raw = await spawnAdapter('/usr/bin/python3', [ONNX_RUNNER, filePath], JSON.stringify(input));
+    } catch (err) {
+      // The bundled image installs python3 but intentionally does NOT bundle
+      // the `onnxruntime` wheel — it has no Alpine binary distribution and
+      // bundling it from source would bloat the image significantly. The
+      // boundary is documented in README "Runtime requirements for `process`
+      // mode". When the runner reports the missing-runtime exit code (3) we
+      // translate it into a clean 503 AppError so the API surface explains
+      // the remediation instead of returning an opaque 500.
+      if (err instanceof AdapterProcessError && err.exitCode === 3) {
+        throw new AppError(
+          503,
+          MODEL_RUNTIME_UNAVAILABLE,
+          'ONNX inference is unavailable: the `onnxruntime` Python package is not installed in the API container. ' +
+            'The official image ships with python3 but not onnxruntime; an operator must `pip install onnxruntime` ' +
+            '(or bake it into a derived image) before /models/{id}/infer can serve ONNX models. ' +
+            'Set MODEL_ADAPTER_MODE=mock to fall back to deterministic mock inference for development.',
+        );
+      }
+      throw err;
+    }
     return JSON.parse(raw);
   }
 }

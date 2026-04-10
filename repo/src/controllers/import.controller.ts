@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import * as importService from '../services/import.service';
 import { audit } from '../services/audit.service';
 import { importLog } from '../utils/logger';
+import { AppError, VALIDATION_ERROR } from '../utils/errors';
 
 export async function downloadTemplateHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -16,12 +17,11 @@ export async function downloadTemplateHandler(req: Request, res: Response, next:
     if (queryFormat === 'csv' || queryFormat === 'xlsx') {
       format = queryFormat;
     } else if (queryFormat) {
-      res.status(400).json({
-        statusCode: 400,
-        code: 'VALIDATION_ERROR',
-        message: 'format must be one of: csv, xlsx',
-      });
-      return;
+      // Route through AppError + the global handler so the response carries
+      // the canonical envelope (statusCode/code/message/requestId) instead
+      // of an ad-hoc body. Same HTTP status (400) and same VALIDATION_ERROR
+      // code, but now consistent with the rest of the API.
+      throw new AppError(400, VALIDATION_ERROR, 'format must be one of: csv, xlsx');
     } else {
       const accept = String(req.headers.accept ?? '').toLowerCase();
       if (accept.includes('text/csv')) {
