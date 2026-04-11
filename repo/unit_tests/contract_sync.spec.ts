@@ -48,12 +48,25 @@ function listOperations(spec: { paths: OpenApiPaths }): Set<string> {
   return ops;
 }
 
-// The canonical OpenAPI source lives at the project root, one level above
-// repo/. It is intentionally NOT mirrored inside repo/, so the test resolves
-// it relative to the repo checkout. This means the contract sync test must
-// be run from a full checkout (host or CI), not from inside the built Docker
-// image (whose build context is repo/).
-const docsPath = path.resolve(__dirname, '..', '..', 'docs', 'api-spec.md');
+// The canonical OpenAPI source lives at the project root, one directory
+// above `repo/` — it is intentionally NOT mirrored inside `repo/`. We
+// resolve it from whichever layout the current runner is using:
+//
+//   1. In-container: docker-compose.yml bind-mounts `../docs` → `/app/docs`
+//      read-only, so from `__dirname = /app/unit_tests` the path is
+//      `path.resolve(__dirname, '..', 'docs', 'api-spec.md')`.
+//
+//   2. Host-side: the canonical project layout is `108/repo/unit_tests/`
+//      alongside `108/docs/`, so from `__dirname` we go up two levels
+//      and then into `docs/`.
+//
+// We try both and pick the first one that exists. This lets the same
+// test work transparently on the host AND inside the container brought
+// up by `./run_tests.sh` without copying `docs/` into the build context
+// or mirroring it inside `repo/`.
+const IN_CONTAINER_DOCS = path.resolve(__dirname, '..', 'docs', 'api-spec.md');
+const HOST_DOCS = path.resolve(__dirname, '..', '..', 'docs', 'api-spec.md');
+const docsPath = fs.existsSync(IN_CONTAINER_DOCS) ? IN_CONTAINER_DOCS : HOST_DOCS;
 const docsYaml = fs.readFileSync(docsPath, 'utf8');
 const loader = yaml.safeLoad ?? yaml.load;
 const docsSpec = loader(docsYaml) as { paths: OpenApiPaths; components?: { schemas?: Record<string, unknown> } };

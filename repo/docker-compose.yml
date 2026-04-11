@@ -49,6 +49,16 @@ services:
       - ./uploads:/app/uploads
       - ./exports:/app/exports
       - ./models:/app/models
+      # The canonical OpenAPI source `docs/api-spec.md` intentionally lives
+      # at the project root (one directory above `repo/`), NOT inside
+      # `repo/`. That means it is not part of the Docker build context and
+      # cannot be `COPY`-ed in. Instead, we bind-mount it read-only at
+      # runtime so `unit_tests/contract_sync.spec.ts` can load it from
+      # inside the container. Docker Compose resolves relative volume
+      # paths against the compose file's directory, so `../docs` resolves
+      # to `project_bundle/docs` on CI and `~/108/docs` on the host —
+      # matching the canonical project layout in both cases.
+      - ../docs:/app/docs:ro
     command: sh -c "npx prisma migrate deploy && node dist/server.js"
 
   db:
