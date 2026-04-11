@@ -109,4 +109,56 @@ describe('loadEnvironment — NODE_ENV=production', () => {
     process.env.ENCRYPTION_KEY = 'a'.repeat(REQUIRED_ENCRYPTION_KEY_LENGTH);
     expect(() => loadEnvironment()).not.toThrow();
   });
+
+  // === Audit-report-1 Finding #2 hardening — TEST_ONLY compose literals ===
+  // The docker-compose.yml ships inline `TEST_ONLY_NOT_FOR_PRODUCTION_*`
+  // values so `docker compose up` works from a fresh clone with no
+  // preamble. Those literals are permitted inside NODE_ENV=test (the CI
+  // stack runs in test mode) but MUST be rejected at server startup
+  // outside test mode, so a production deploy that forgets to override
+  // them refuses to boot instead of silently inheriting CI credentials.
+  it('throws when JWT_SECRET is the compose TEST_ONLY literal (production mode)', () => {
+    process.env.JWT_SECRET =
+      'TEST_ONLY_NOT_FOR_PRODUCTION_jwt_secret_padding_to_64_chars_xx';
+    process.env.ENCRYPTION_KEY = 'a'.repeat(REQUIRED_ENCRYPTION_KEY_LENGTH);
+    expect(() => loadEnvironment()).toThrow(/test-only value/);
+  });
+
+  it('throws when ENCRYPTION_KEY is the compose TEST_ONLY literal (production mode)', () => {
+    process.env.JWT_SECRET = 'x'.repeat(MIN_JWT_SECRET_LENGTH);
+    process.env.ENCRYPTION_KEY = 'TEST_ONLY_NOT_FOR_PRODUCTION__32';
+    expect(() => loadEnvironment()).toThrow(/test-only value/);
+  });
+
+  it('throws when JWT_SECRET is the in-process test fallback (production mode)', () => {
+    process.env.JWT_SECRET = 'test-only-jwt-secret-do-not-use-in-prod-32+chars';
+    process.env.ENCRYPTION_KEY = 'a'.repeat(REQUIRED_ENCRYPTION_KEY_LENGTH);
+    expect(() => loadEnvironment()).toThrow(/test-only value/);
+  });
+
+  it('throws when ENCRYPTION_KEY is the in-process test fallback (production mode)', () => {
+    process.env.JWT_SECRET = 'x'.repeat(MIN_JWT_SECRET_LENGTH);
+    process.env.ENCRYPTION_KEY = 'test_only_encryption_key_32bytes';
+    expect(() => loadEnvironment()).toThrow(/test-only value/);
+  });
+});
+
+// === Audit-report-1 Finding #2 hardening — test-mode allowance ===
+// Same TEST_ONLY literals MUST pass validation inside NODE_ENV=test.
+// Otherwise the running test stack (which sets NODE_ENV=test and uses
+// exactly those literals) would refuse to boot and every API test
+// would fail.
+describe('loadEnvironment — NODE_ENV=test (TEST_ONLY literals)', () => {
+  beforeEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    process.env.NODE_ENV = 'test';
+  });
+
+  it('accepts the compose TEST_ONLY JWT_SECRET literal under NODE_ENV=test', () => {
+    process.env.JWT_SECRET =
+      'TEST_ONLY_NOT_FOR_PRODUCTION_jwt_secret_padding_to_64_chars_xx';
+    process.env.ENCRYPTION_KEY = 'TEST_ONLY_NOT_FOR_PRODUCTION__32';
+    process.env.DATABASE_URL = 'mysql://u:p@db:3306/tripforge';
+    expect(() => loadEnvironment()).not.toThrow();
+  });
 });
