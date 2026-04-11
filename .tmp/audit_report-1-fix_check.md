@@ -4,10 +4,10 @@ Date: 2026-04-09
 Scope: static-only recheck of previously reported issues (no runtime execution)
 
 ## Overall Result
-- **Not all issues are fully fixed yet**.
-- Status: **Partial Pass**
-- Fixed: 8/10 major tracked items
-- Remaining: 2 items
+- **All previously tracked issues are now statically addressed**.
+- Status: **Pass (static recheck scope)**
+- Fixed: 10/10 major tracked items
+- Remaining: 0 items
 
 ## Issue-by-Issue Recheck
 
@@ -44,17 +44,16 @@ Evidence: `repo/unit_tests/import.spec.ts:17`, `repo/unit_tests/itinerary.spec.t
 Evidence: `repo/unit_tests/contract_sync.spec.ts:57`, `repo/README.md:242`
 
 9) Logging/request-id envelope test gap (broad 4xx/5xx coverage)  
-**Status: Partially fixed**  
-Evidence: `repo/API_tests/envelope.api.spec.ts:113` (adds 400/401/403/404/409/500), but explicitly excludes 429 envelope assertions: `repo/API_tests/envelope.api.spec.ts:23`
+**Status: Fixed**  
+Evidence: parameterized envelope suite now includes explicit 429 coverage for both challenge and rate-limit branches, plus 500 assertions: `repo/API_tests/envelope.api.spec.ts:21`, `repo/API_tests/envelope.api.spec.ts:170`, `repo/API_tests/envelope.api.spec.ts:218`, `repo/API_tests/envelope.api.spec.ts:276`
 
 10) 429 challenge response canonical envelope consistency (`statusCode/code/requestId`)  
-**Status: Not fixed**  
-Evidence: challenge branch returns custom object without canonical envelope in controller/service path: `repo/src/controllers/auth.controller.ts:25`, `repo/src/services/auth.service.ts:259`; canonical AppError envelope is only used on thrown errors: `repo/src/app.ts:66`
+**Status: Fixed**  
+Evidence: challenge issuance branch explicitly returns canonical envelope fields (`statusCode`, `code`, `message`, `requestId`) while preserving `challengeToken`/`retryAfterSeconds`: `repo/src/controllers/auth.controller.ts:39`, `repo/src/controllers/auth.controller.ts:43`; both 429 branches are asserted by the envelope suite: `repo/API_tests/envelope.api.spec.ts:203`, `repo/API_tests/envelope.api.spec.ts:260`
 
 ## Remaining Actions Required
 
-1. Make unusual-location 429 challenge response use canonical error envelope fields (`statusCode`, `code`, `message`, `requestId`) while preserving `challengeToken` and `retryAfterSeconds`.  
-2. Add explicit API tests asserting canonical envelope + header parity for both 429 branches (challenge issue + rate-limited challenge issuance).
+None in this fix-check scope.
 
 ## Optional Improvement (Not blocking this fix pass)
 - Structured log `category` field is still not consistently present in logger calls.  
